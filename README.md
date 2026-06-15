@@ -53,3 +53,68 @@ LexAI operates on a continuous feedback loop between two specialized agents:
 - **Vector Database (RAG):** ChromaDB (Local persistent storage with ONNX embeddings)
 - **Document Processing:** PyMuPDF (fitz)
 - **Data Security:** Microsoft Presidio (PII detection), Cryptography (Fernet symmetric encryption)
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+- Node.js (v18+)
+- Python (3.11+)
+- NVIDIA NIM API Key (for DeepSeek models)
+
+### 1. Backend Setup
+
+```bash
+cd backend
+python -m venv venv
+
+# Activate virtual environment
+# Windows:
+.\venv\Scripts\activate
+# Mac/Linux:
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Download spaCy model (required for PII detection)
+python -m spacy download en_core_web_sm
+
+# Set up environment variables
+cp .env.example .env
+# Edit .env and add your NVIDIA_API_KEY
+
+# Start the FastAPI server
+python -m uvicorn backend.main:app --reload --port 8000
+```
+*The backend will be available at `http://localhost:8000`.*
+
+### 2. Frontend Setup
+
+```bash
+cd frontend
+
+# Install dependencies
+npm install
+
+# Start the Next.js development server
+npm run dev
+```
+*The frontend will be available at `http://localhost:3000`.*
+
+---
+
+## 🧪 Running Smoke Tests
+
+To verify that the backend is configured correctly (API keys, RAG DB, PII detectors), run the included smoke test script:
+
+```bash
+cd backend
+.\venv\Scripts\python test_quick.py
+```
+This tests the configuration, Pydantic schemas, RAG vector retrieval, and PII anonymization pipelines.
+
+---
+
+## 🏆 Built For
+This project was designed for the AI & Automation track of a competitive hackathon. It prioritizes data privacy (PII masking), adversarial robustness, and a highly polished user experience.
