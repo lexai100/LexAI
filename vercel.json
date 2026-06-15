@@ -1,19 +1,12 @@
 {
+  "version": 2,
   "builds": [
     {
       "src": "frontend/package.json",
       "use": "@vercel/next"
-    },
-    {
-      "src": "backend/backend/main.py",
-      "use": "@vercel/python"
     }
   ],
   "rewrites": [
-    {
-      "source": "/api/:path*",
-      "destination": "/backend/backend/main.py"
-    },
     {
       "source": "/(.*)",
       "destination": "/frontend/$1"

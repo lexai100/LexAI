@@ -1,0 +1,27 @@
+# render.yaml — Backend deployment configuration for Render.com
+# Free tier: 512MB RAM, auto-deploys from GitHub
+# Deploy at: https://dashboard.render.com/new/web-service
+
+services:
+  - type: web
+    name: lexai-backend
+    runtime: python
+    region: singapore  # Closest free tier region to India
+    plan: free
+    rootDir: backend
+    buildCommand: |
+      pip install -r requirements.txt
+      python -m spacy download en_core_web_sm
+    startCommand: python -m uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: NVIDIA_API_KEY
+        sync: false   # Set this manually in Render dashboard
+      - key: GROQ_API_KEY
+        sync: false   # Set this manually in Render dashboard
+      - key: INDIAN_KANOON_TOKEN
+        sync: false   # Set this manually in Render dashboard
+      - key: ENCRYPTION_KEY
+        generateValue: true   # Auto-generates a secure key
+      - key: PYTHON_VERSION
+        value: "3.11.0"

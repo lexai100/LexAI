@@ -116,5 +116,32 @@ This tests the configuration, Pydantic schemas, RAG vector retrieval, and PII an
 
 ---
 
+## 🚢 Deployment
+
+Because of the Python backend's heavy dependencies (`spacy`, `chromadb`, `presidio`), the two services are deployed separately:
+
+| Service | Platform | Why |
+|---------|----------|-----|
+| **Frontend** (Next.js) | [Vercel](https://vercel.com) | Zero-config, free, instant |
+| **Backend** (FastAPI) | [Render](https://render.com) | Supports Python, 512MB RAM free tier |
+
+### Deploy Frontend to Vercel
+1. Connect your GitHub repo to [Vercel](https://vercel.com/new)
+2. Set **Root Directory** to `frontend`
+3. Add environment variable: `NEXT_PUBLIC_API_URL` = your Render backend URL
+4. Deploy!
+
+### Deploy Backend to Render
+1. Go to [Render Dashboard](https://dashboard.render.com/new/web-service)
+2. Connect your GitHub repo — Render will auto-detect the `render.yaml` file
+3. Add the secret environment variables in Render's dashboard:
+   - `NVIDIA_API_KEY`
+   - `GROQ_API_KEY`
+   - `INDIAN_KANOON_TOKEN`
+4. Deploy! First build takes ~5 mins (downloads spaCy model).
+
+---
+
 ## 🏆 Built For
-This project was designed for the AI & Automation track of a competitive hackathon. It prioritizes data privacy (PII masking), adversarial robustness, and a highly polished user experience.
+This project was built for the **AI & Automation** track of a competitive hackathon. It prioritizes data privacy (PII masking never leaving local context), adversarial robustness, and a highly polished demo experience.
+
