@@ -7,12 +7,15 @@ import {
   connectWebSocket,
   getTemplates,
   downloadDocument,
+  searchKanoonForType,
   type AnalysisResult,
   type AdversarialRound,
   type WSMessage,
   type TemplateInfo,
   type Vulnerability,
+  type KanoonResult,
 } from "@/lib/api";
+import VoiceInterface from "@/components/VoiceInterface";
 
 // ── Icons (inline SVG to avoid deps) ────────────────────────────────────
 
@@ -119,7 +122,15 @@ export default function Home() {
   // Results
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [activeResultTab, setActiveResultTab] = useState<"overview" | "vulns" | "document" | "rounds">("overview");
+  const [activeResultTab, setActiveResultTab] = useState<"overview" | "vulns" | "document" | "rounds" | "caselaw">("overview");
+
+  // Case law
+  const [kanoonResults, setKanoonResults] = useState<KanoonResult[]>([]);
+  const [kanoonLoading, setKanoonLoading] = useState(false);
+  const [kanoonCourt, setKanoonCourt] = useState("");
+
+  // Voice readback text (speaks the summary after analysis)
+  const [ttsText, setTtsText] = useState<string | undefined>(undefined);
 
   // Refs
   const wsRef = useRef<WebSocket | null>(null);
@@ -149,6 +160,19 @@ export default function Home() {
         setIsProcessing(false);
         setProgress(100);
         setStatusText("Analysis complete!");
+        // Speak a brief summary aloud
+        setTtsText(
+          `Analysis complete. Final risk score: ${msg.result.final_score} out of 100. ` +
+          (msg.result.final_score < 15
+            ? "Your document is safe."
+            : msg.result.final_score < 40
+            ? "Minor issues were found. Review the vulnerabilities."
+            : "Significant vulnerabilities remain. Legal review is recommended.")
+        );
+        // Auto-fetch case law for the document type
+        if (msg.result.document_type) {
+          fetchCaseLaw(msg.result.document_type);
+        }
         break;
       case "error":
         setError(msg.error);
@@ -157,6 +181,39 @@ export default function Home() {
         break;
     }
   }, []);
+
+  // ── Voice transcript handler ────────────────────────────────────────
+
+  const handleVoiceTranscript = useCallback(
+    (text: string) => {
+      if (mode === "analyze") {
+        setTextInput((prev) => (prev ? `${prev}\n${text}` : text));
+      } else {
+        setDescription((prev) => (prev ? `${prev} ${text}` : text));
+      }
+    },
+    [mode]
+  );
+
+  // ── Case law fetch ──────────────────────────────────────────────────
+
+  const fetchCaseLaw = useCallback(
+    async (documentType: string, court: string = kanoonCourt) => {
+      setKanoonLoading(true);
+      try {
+        const res = await searchKanoonForType(
+          documentType.toLowerCase(),
+          court,
+        );
+        setKanoonResults(res.results);
+      } catch {
+        setKanoonResults([]);
+      } finally {
+        setKanoonLoading(false);
+      }
+    },
+    [kanoonCourt]
+  );
 
   // ── Submit handlers ─────────────────────────────────────────────────
 
@@ -357,12 +414,22 @@ export default function Home() {
                 </div>
 
                 <textarea
-                  className="lexai-textarea mb-6"
+                  className="lexai-textarea mb-4"
                   placeholder="Paste your legal document text here..."
                   value={textInput}
                   onChange={(e) => setTextInput(e.target.value)}
                   rows={8}
                 />
+
+                {/* Voice input for analyze mode */}
+                <div className="mb-6">
+                  <p className="text-xs text-[var(--color-lexai-text-muted)] uppercase tracking-wider mb-2">🎙️ Or speak your document / query</p>
+                  <VoiceInterface
+                    onTranscript={handleVoiceTranscript}
+                    textToSpeak={ttsText}
+                    placeholder="Speak your document text or describe what you need…"
+                  />
+                </div>
 
                 <button
                   onClick={handleAnalyze}
@@ -606,11 +673,18 @@ export default function Home() {
             </div>
 
             {/* Result tabs */}
-            <div className="flex gap-2 mb-6 border-b border-[var(--color-lexai-border)] pb-1">
-              {(["overview", "vulns", "document", "rounds"] as const).map((tab) => (
+            <div className="flex gap-2 mb-6 border-b border-[var(--color-lexai-border)] pb-1 flex-wrap">
+              {(["overview", "vulns", "document", "rounds", "caselaw"] as const).map((tab) => (
                 <button
                   key={tab}
-                  onClick={() => setActiveResultTab(tab)}
+                  id={`result-tab-${tab}`}
+                  onClick={() => {
+                    setActiveResultTab(tab);
+                    // Lazy-load case law when tab is opened
+                    if (tab === "caselaw" && kanoonResults.length === 0 && result?.document_type) {
+                      fetchCaseLaw(result.document_type);
+                    }
+                  }}
                   className={`px-4 py-2 text-sm font-semibold transition-all rounded-t-lg ${
                     activeResultTab === tab
                       ? "text-[var(--color-lexai-accent)] bg-[var(--color-lexai-surface-2)]"
@@ -621,6 +695,7 @@ export default function Home() {
                   {tab === "vulns" && `Vulnerabilities`}
                   {tab === "document" && "Final Document"}
                   {tab === "rounds" && "Battle Log"}
+                  {tab === "caselaw" && "⚖️ Case Law"}
                 </button>
               ))}
             </div>
@@ -783,6 +858,88 @@ export default function Home() {
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* ── Case Law Tab ──────────────────────────── */}
+              {activeResultTab === "caselaw" && (
+                <div>
+                  <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+                    <h3 className="text-lg font-bold">Relevant Indian Case Law</h3>
+                    <div className="flex gap-2 items-center flex-wrap">
+                      <select
+                        id="kanoon-court-filter"
+                        className="lexai-input text-sm py-1.5"
+                        value={kanoonCourt}
+                        onChange={(e) => {
+                          setKanoonCourt(e.target.value);
+                          if (result?.document_type) fetchCaseLaw(result.document_type, e.target.value);
+                        }}
+                      >
+                        <option value="">All Courts</option>
+                        <option value="supremecourt">Supreme Court</option>
+                        <option value="delhi">Delhi High Court</option>
+                        <option value="delhidc">Delhi District Courts</option>
+                        <option value="karnataka">Karnataka High Court</option>
+                        <option value="bombay">Bombay High Court</option>
+                        <option value="madras">Madras High Court</option>
+                      </select>
+                      <button
+                        id="kanoon-refresh-btn"
+                        type="button"
+                        className="btn-secondary text-sm py-1.5 px-4"
+                        onClick={() => result?.document_type && fetchCaseLaw(result.document_type)}
+                        disabled={kanoonLoading}
+                      >
+                        {kanoonLoading ? "Searching…" : "↻ Refresh"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {kanoonLoading && (
+                    <div className="text-center py-10 text-[var(--color-lexai-text-muted)]">
+                      <div className="inline-block w-8 h-8 border-2 border-[var(--color-lexai-accent)] border-t-transparent rounded-full animate-spin mb-3" />
+                      <p className="text-sm">Searching Indian Kanoon…</p>
+                    </div>
+                  )}
+
+                  {!kanoonLoading && kanoonResults.length === 0 && (
+                    <div className="text-center py-10">
+                      <p className="text-[var(--color-lexai-text-muted)] text-sm">
+                        No cases found — try a different court filter or click Refresh.
+                      </p>
+                      <p className="text-xs text-[var(--color-lexai-text-muted)] mt-2 opacity-60">
+                        (Indian Kanoon API must be configured on the backend)
+                      </p>
+                    </div>
+                  )}
+
+                  {!kanoonLoading && kanoonResults.length > 0 && (
+                    <div className="flex flex-col gap-3">
+                      {kanoonResults.map((c) => (
+                        <a
+                          key={c.tid}
+                          href={c.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="kanoon-card"
+                          id={`kanoon-case-${c.tid}`}
+                        >
+                          <p className="kanoon-card-title">{c.title}</p>
+                          <div className="kanoon-card-meta">
+                            {c.court && <span className="kanoon-badge">{c.court}</span>}
+                            {c.date && <span>{c.date}</span>}
+                            <span className="kanoon-badge" style={{ background: "rgba(34,197,94,0.1)", color: "var(--color-lexai-success)", borderColor: "rgba(34,197,94,0.2)" }}>
+                              {c.doc_type}
+                            </span>
+                          </div>
+                          {c.headline && <p className="kanoon-card-headline">{c.headline}</p>}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+
+                  <p className="kanoon-attribution">Powered by Indian Kanoon · indiankanoon.org</p>
                 </div>
               )}
             </div>

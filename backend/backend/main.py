@@ -41,8 +41,10 @@ from backend.models.schemas import (
     TemplateInfo,
 )
 from backend.services.document_processor import DocumentProcessorService
+from backend.services.indian_kanoon import IndianKanoonClient
 from backend.services.pii_detector import PIIDetectorService
 from backend.services.rag_service import RAGService
+from backend.services.voice_service import VoiceService
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -64,12 +66,15 @@ pii_service: PIIDetectorService | None = None
 document_craft: DocumentCraftAgent | None = None
 loophole_hound: LoopholeHoundAgent | None = None
 adversarial_loop: AdversarialLoop | None = None
+voice_service: VoiceService | None = None
+kanoon_client: IndianKanoonClient | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialise services on startup, clean up on shutdown."""
     global rag_service, pii_service, document_craft, loophole_hound, adversarial_loop
+    global voice_service, kanoon_client
 
     logger.info("══════════════════════════════════════════════════")
     logger.info("  LexAI Backend starting up…")
@@ -99,6 +104,26 @@ async def lifespan(app: FastAPI):
         settings.DOCUMENT_CRAFT_MODEL,
         settings.LOOPHOLE_HOUND_MODEL,
     )
+
+    # Voice service
+    if settings.GROQ_API_KEY:
+        try:
+            voice_service = VoiceService(groq_api_key=settings.GROQ_API_KEY)
+            logger.info("Voice service ready (Groq Whisper — multilingual)")
+        except Exception as exc:
+            logger.warning("Voice service init failed: %s", exc)
+    else:
+        logger.warning("GROQ_API_KEY not set — voice service disabled")
+
+    # Indian Kanoon
+    if settings.INDIAN_KANOON_TOKEN:
+        try:
+            kanoon_client = IndianKanoonClient(api_token=settings.INDIAN_KANOON_TOKEN)
+            logger.info("Indian Kanoon client ready")
+        except Exception as exc:
+            logger.warning("Indian Kanoon init failed: %s", exc)
+    else:
+        logger.warning("INDIAN_KANOON_TOKEN not set — case law search disabled")
 
     logger.info("══════════════════════════════════════════════════")
     logger.info("  LexAI Backend ready on http://%s:%d", settings.HOST, settings.PORT)
@@ -483,47 +508,84 @@ async def list_templates():
 # ── Voice STT ─────────────────────────────────────────────────────────────────
 
 @app.post("/api/voice/stt", tags=["voice"], response_model=STTResponse)
-async def speech_to_text(file: UploadFile = File(...)):
+async def speech_to_text(
+    file: UploadFile = File(...),
+    language: str = Form("auto"),
+):
     """
-    Convert speech to text using Groq Whisper API.
-    Accepts audio files (wav, mp3, m4a, webm, etc.).
+    Convert speech to text using Groq Whisper (multilingual).
+    Supports: en, hi (Hindi), kn (Kannada), ta (Tamil), te (Telugu), mr (Marathi).
+    Set language='auto' for automatic detection.
+    PII (Aadhaar, PAN, phone) is automatically stripped from the transcript.
     """
-    if not settings.GROQ_API_KEY:
-        raise HTTPException(500, "GROQ_API_KEY not configured")
+    if not voice_service:
+        raise HTTPException(503, "Voice service not available — GROQ_API_KEY not configured")
 
     audio_bytes = await file.read()
     if not audio_bytes:
         raise HTTPException(400, "Audio file is empty")
 
-    filename = file.filename or "audio.wav"
+    filename = file.filename or "audio.webm"
 
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.post(
-                f"{settings.GROQ_BASE_URL}/audio/transcriptions",
-                headers={"Authorization": f"Bearer {settings.GROQ_API_KEY}"},
-                files={"file": (filename, audio_bytes)},
-                data={
-                    "model": "whisper-large-v3-turbo",
-                    "response_format": "verbose_json",
-                    "language": "en",
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-
-        return STTResponse(
-            text=data.get("text", ""),
-            language=data.get("language", "en"),
-            duration_seconds=data.get("duration", 0.0),
+        result = await voice_service.transcribe(
+            audio_bytes=audio_bytes,
+            filename=filename,
+            language=language,  # type: ignore[arg-type]
+            sanitize_pii=True,
         )
-
-    except httpx.HTTPStatusError as exc:
-        logger.error("Groq STT error: %s", exc.response.text)
-        raise HTTPException(502, f"Speech-to-text failed: {exc.response.status_code}")
+        return STTResponse(
+            text=result["text"],
+            language=result["language"],
+            duration_seconds=result["duration_seconds"],
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except RuntimeError as exc:
+        logger.error("STT error: %s", exc)
+        raise HTTPException(502, str(exc))
     except Exception as exc:
-        logger.exception("STT error: %s", exc)
+        logger.exception("Unexpected STT error: %s", exc)
         raise HTTPException(500, f"Speech-to-text error: {exc}")
+
+
+@app.post("/api/voice/tts", tags=["voice"])
+async def text_to_speech(body: dict):
+    """
+    Prepare text for browser TTS playback.
+    Returns the text plus voice hint metadata so the frontend can select
+    the best available Indian voice via window.speechSynthesis.
+
+    (Sarvam Bulbul upgrade: swap this endpoint body for an audio stream once
+    the Sarvam API key is available.)
+    """
+    text = (body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "text is required")
+
+    language = body.get("language", "en")
+
+    # Map detected language → BCP-47 tag for SpeechSynthesis voice selection
+    lang_map = {
+        "hi": "hi-IN",
+        "kn": "kn-IN",
+        "ta": "ta-IN",
+        "te": "te-IN",
+        "mr": "mr-IN",
+        "en": "en-IN",
+    }
+    bcp47 = lang_map.get(language, "en-IN")
+
+    # Truncate for safety (browsers have TTS length limits)
+    if len(text) > 2000:
+        text = text[:1997] + "…"
+
+    return {
+        "text": text,
+        "language_bcp47": bcp47,
+        "provider": "browser",  # will be 'sarvam' after upgrade
+        "char_count": len(text),
+    }
 
 
 # ── Quick analysis (no adversarial loop) ──────────────────────────────────────
@@ -563,6 +625,93 @@ async def rag_stats():
     if not rag_service:
         raise HTTPException(500, "RAG service not initialized")
     return rag_service.get_stats()
+
+
+# ── Indian Kanoon — Case Law Search ───────────────────────────────────────────
+
+@app.get("/api/kanoon/search", tags=["case-law"])
+async def kanoon_search(
+    q: str,
+    court: str = "",
+    page: int = 0,
+):
+    """
+    Search Indian Kanoon for relevant court judgments.
+
+    Query params:
+      - q: search query (e.g. "rent dispute landlord")
+      - court: court code filter — 'delhi', 'karnataka', 'supremecourt', '' (all)
+      - page: result page (0-indexed)
+
+    Returns top-5 results with title, headline, court, date, and public URL.
+    Powered by Indian Kanoon API (attribution required).
+    """
+    if not kanoon_client:
+        raise HTTPException(
+            503,
+            "Indian Kanoon search not available — INDIAN_KANOON_TOKEN not configured",
+        )
+    if not q or len(q.strip()) < 3:
+        raise HTTPException(400, "Query must be at least 3 characters")
+
+    try:
+        results = await kanoon_client.search(
+            query=q.strip(),
+            court=court,  # type: ignore[arg-type]
+            page=page,
+            max_results=5,
+        )
+        return {
+            "query": q,
+            "court": court or "all",
+            "page": page,
+            "results": results,
+            "attribution": "Powered by Indian Kanoon (indiankanoon.org)",
+        }
+    except RuntimeError as exc:
+        logger.error("Kanoon search error: %s", exc)
+        raise HTTPException(502, str(exc))
+    except Exception as exc:
+        logger.exception("Unexpected Kanoon error: %s", exc)
+        raise HTTPException(500, f"Case law search error: {exc}")
+
+
+@app.get("/api/kanoon/doc/{doc_id}", tags=["case-law"])
+async def kanoon_get_doc(doc_id: int):
+    """Fetch full text of an Indian Kanoon judgment by document ID."""
+    if not kanoon_client:
+        raise HTTPException(503, "Indian Kanoon not configured")
+    try:
+        return await kanoon_client.get_document(doc_id)
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc))
+
+
+@app.get("/api/kanoon/search-for-type", tags=["case-law"])
+async def kanoon_search_for_type(
+    document_type: str,
+    court: str = "",
+    context: str = "",
+):
+    """
+    Smart case-law search: given a document type (e.g. 'rent_agreement'),
+    returns the most relevant Indian court cases for that contract category.
+    """
+    if not kanoon_client:
+        raise HTTPException(503, "Indian Kanoon not configured")
+    try:
+        results = await kanoon_client.search_for_document_type(
+            document_type=document_type,
+            context=context or None,
+            court=court,  # type: ignore[arg-type]
+        )
+        return {
+            "document_type": document_type,
+            "results": results,
+            "attribution": "Powered by Indian Kanoon (indiankanoon.org)",
+        }
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc))
 
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────

@@ -190,3 +190,104 @@ export function connectWebSocket(
 
   return ws;
 }
+
+// ── Voice ────────────────────────────────────────────────────────────────────
+
+export interface STTResult {
+  text: string;
+  language: string;
+  duration_seconds: number;
+}
+
+/**
+ * Send an audio Blob to the backend Groq Whisper STT endpoint.
+ * Returns the transcript text + detected language.
+ */
+export async function sendVoiceAudio(
+  audioBlob: Blob,
+  language: string = "auto"
+): Promise<STTResult> {
+  const formData = new FormData();
+  formData.append("file", audioBlob, "audio.webm");
+  formData.append("language", language);
+
+  const res = await fetch(`${API_BASE}/api/voice/stt`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || "STT failed");
+  }
+  return res.json();
+}
+
+// ── Indian Kanoon ─────────────────────────────────────────────────────────────
+
+export interface KanoonResult {
+  tid: number;
+  title: string;
+  headline: string;
+  doc_type: string;
+  court: string;
+  date: string;
+  url: string;
+}
+
+export interface KanoonSearchResponse {
+  query: string;
+  court: string;
+  page: number;
+  results: KanoonResult[];
+  attribution: string;
+}
+
+/**
+ * Search Indian Kanoon for court judgments.
+ * @param q   - search query
+ * @param court - court filter: 'delhi' | 'karnataka' | 'supremecourt' | '' (all)
+ * @param page  - result page (0-indexed)
+ */
+export async function searchKanoon(
+  q: string,
+  court: string = "",
+  page: number = 0
+): Promise<KanoonSearchResponse> {
+  const params = new URLSearchParams({ q, court, page: String(page) });
+  const res = await fetch(`${API_BASE}/api/kanoon/search?${params}`);
+  if (!res.ok) {
+    if (res.status === 503) {
+      throw new Error("Indian Kanoon not configured on this server");
+    }
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || "Case law search failed");
+  }
+  return res.json();
+}
+
+/**
+ * Smart document-type-aware case law search.
+ * e.g. document_type="rent_agreement" returns rent dispute cases.
+ */
+export async function searchKanoonForType(
+  documentType: string,
+  court: string = "",
+  context: string = ""
+): Promise<KanoonSearchResponse> {
+  const params = new URLSearchParams({
+    document_type: documentType,
+    court,
+    context,
+  });
+  const res = await fetch(`${API_BASE}/api/kanoon/search-for-type?${params}`);
+  if (!res.ok) {
+    if (res.status === 503) {
+      throw new Error("Indian Kanoon not configured on this server");
+    }
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || "Case law search failed");
+  }
+  return res.json();
+}
+
