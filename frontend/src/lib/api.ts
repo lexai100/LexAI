@@ -25,6 +25,7 @@ export interface AdversarialRound {
   score: number;
   vulnerabilities_found: number;
   patches_applied: number;
+  patch_summary?: string;
   attack_report: LoopholeReport;
 }
 

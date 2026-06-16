@@ -16,6 +16,9 @@ import {
   type KanoonResult,
 } from "@/lib/api";
 import VoiceInterface from "@/components/VoiceInterface";
+import ComplianceRadar from "@/components/ComplianceRadar";
+import LoopholeNetwork from "@/components/LoopholeNetwork";
+import { generatePDF } from "@/lib/generatePDF";
 
 // ── Icons (inline SVG to avoid deps) ────────────────────────────────────
 
@@ -709,40 +712,11 @@ export default function Home() {
                     {result.summary}
                   </p>
 
-                  {/* Radar scores */}
+                  {/* Recharts Compliance Radar */}
                   {result.radar_scores && (
                     <div className="mt-8">
                       <h4 className="text-md font-bold mb-4">Compliance Radar</h4>
-                      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                        {Object.entries(result.radar_scores).map(([key, value]) => (
-                          <div key={key} className="bg-[var(--color-lexai-surface)] rounded-xl p-4">
-                            <p className="text-xs text-[var(--color-lexai-text-muted)] uppercase tracking-wider mb-2">
-                              {key.replace(/_/g, " ")}
-                            </p>
-                            <div className="flex items-center gap-3">
-                              <div className="flex-1">
-                                <div className="progress-bar">
-                                  <div
-                                    className="progress-fill"
-                                    style={{
-                                      width: `${value}%`,
-                                      background:
-                                        value >= 70
-                                          ? "linear-gradient(90deg, #22c55e, #4ade80)"
-                                          : value >= 40
-                                          ? "linear-gradient(90deg, #f59e0b, #fbbf24)"
-                                          : "linear-gradient(90deg, #ef4444, #f87171)",
-                                    }}
-                                  />
-                                </div>
-                              </div>
-                              <span className="text-lg font-bold" style={{ color: getScoreColor(100 - value) }}>
-                                {value}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+                      <ComplianceRadar scores={result.radar_scores as unknown as Record<string, number>} />
                     </div>
                   )}
                 </div>
@@ -750,9 +724,31 @@ export default function Home() {
 
               {activeResultTab === "vulns" && (
                 <div>
-                  <h3 className="text-lg font-bold mb-4">
-                    Vulnerabilities Found
-                  </h3>
+                  <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+                    <h3 className="text-lg font-bold">Vulnerabilities Found</h3>
+                  </div>
+
+                  {/* Loophole Network Graph */}
+                  {result.rounds.length > 0 &&
+                    result.rounds[0]?.attack_report?.vulnerabilities?.length > 0 && (
+                    <div className="glass-card p-4 mb-6">
+                      <h4 className="text-sm font-bold mb-3 text-[var(--color-lexai-text-muted)] uppercase tracking-wider">
+                        🕸️ Vulnerability Network
+                      </h4>
+                      <LoopholeNetwork
+                        vulnerabilities={result.rounds[0].attack_report.vulnerabilities.map(
+                          (v: Vulnerability, i: number) => ({
+                            id: `v-${i}`,
+                            title: v.name ?? "Unknown",
+                            severity: (v.severity?.toLowerCase() ?? "medium") as "critical" | "high" | "medium" | "low",
+                            description: v.explanation,
+                          })
+                        )}
+                      />
+                    </div>
+                  )}
+
+                  {/* Vulnerability cards */}
                   {result.rounds.length > 0 &&
                     result.rounds[0]?.attack_report?.vulnerabilities?.length > 0 ? (
                     <div className="flex flex-col gap-4">
@@ -778,22 +774,8 @@ export default function Home() {
                             </p>
                             {vuln.exploitation_scenario && (
                               <div className="bg-red-500/5 border border-red-500/20 rounded-lg p-3 mb-3">
-                                <p className="text-xs font-semibold text-red-300 mb-1">
-                                  Exploitation Scenario
-                                </p>
-                                <p className="text-xs text-[var(--color-lexai-text-muted)]">
-                                  {vuln.exploitation_scenario}
-                                </p>
-                              </div>
-                            )}
-                            {vuln.suggested_fix && (
-                              <div className="bg-green-500/5 border border-green-500/20 rounded-lg p-3">
-                                <p className="text-xs font-semibold text-green-300 mb-1">
-                                  Suggested Fix
-                                </p>
-                                <p className="text-xs text-[var(--color-lexai-text-muted)]">
-                                  {vuln.suggested_fix}
-                                </p>
+                                <p className="text-xs font-semibold text-red-400 mb-1">Exploitation Scenario</p>
+                                <p className="text-xs text-[var(--color-lexai-text-muted)]">{vuln.exploitation_scenario}</p>
                               </div>
                             )}
                           </div>
@@ -805,17 +787,31 @@ export default function Home() {
                       No vulnerability data available.
                     </p>
                   )}
-                </div>
+                 </div>
               )}
+
+
 
               {activeResultTab === "document" && (
                 <div>
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-lg font-bold">Hardened Document</h3>
-                    <button onClick={handleDownload} className="btn-secondary text-sm">
+                    <button
+                      onClick={() =>
+                        result?.task_id &&
+                        generatePDF(result.task_id, result.final_document ?? "", {
+                          initial_score: result.initial_score,
+                          final_score: result.final_score,
+                          rounds: result.rounds.length,
+                          document_type: result.document_type,
+                          summary: result.summary,
+                        })
+                      }
+                      className="btn-secondary text-sm"
+                    >
                       <span className="flex items-center gap-2">
                         <DownloadIcon className="w-4 h-4" />
-                        Download
+                        Download PDF
                       </span>
                     </button>
                   </div>
@@ -829,34 +825,62 @@ export default function Home() {
 
               {activeResultTab === "rounds" && (
                 <div>
-                  <h3 className="text-lg font-bold mb-4">Battle Log</h3>
-                  <div className="flex flex-col gap-4">
-                    {result.rounds.map((round) => (
-                      <div
-                        key={round.round_number}
-                        className="bg-[var(--color-lexai-surface)] rounded-xl p-5 border border-[var(--color-lexai-border)]"
-                      >
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-full bg-[var(--color-lexai-surface-2)] flex items-center justify-center font-bold text-[var(--color-lexai-accent)]">
-                              {round.round_number}
-                            </div>
-                            <div>
-                              <p className="font-semibold">Round {round.round_number}</p>
-                              <p className="text-xs text-[var(--color-lexai-text-muted)]">
-                                {round.vulnerabilities_found} vulnerabilities • {round.patches_applied} patches
-                              </p>
+                  <h3 className="text-lg font-bold mb-4">Battle Log — Before vs After Each Round</h3>
+                  <div className="diff-wrap">
+                    {result.rounds.map((round, idx) => {
+                      const prevScore = idx === 0 ? result.initial_score : result.rounds[idx - 1].score;
+                      const vulns = round.attack_report?.vulnerabilities ?? [];
+                      return (
+                        <div key={round.round_number} className="diff-round-block">
+                          {/* Header */}
+                          <div className="diff-round-header">
+                            <p className="diff-round-title">⚔️ Round {round.round_number}</p>
+                            <div className="diff-score-arrow">
+                              <span style={{ color: getScoreColor(prevScore), fontWeight: 700 }}>{prevScore}</span>
+                              <span style={{ color: "var(--color-lexai-text-muted)" }}>→</span>
+                              <span style={{ color: getScoreColor(round.score), fontWeight: 700 }}>{round.score}</span>
+                              <span style={{ color: "var(--color-lexai-success)", fontSize: "0.72rem" }}>
+                                ↓{prevScore - round.score} pts
+                              </span>
                             </div>
                           </div>
-                          <div
-                            className="text-3xl font-extrabold"
-                            style={{ color: getScoreColor(round.score) }}
-                          >
-                            {round.score}
+
+                          {/* Body */}
+                          <div className="diff-body">
+                            {/* Left: vulnerabilities found */}
+                            <div className="diff-panel">
+                              <p className="diff-panel-label">🔍 LoopholeHound Found ({vulns.length})</p>
+                              {vulns.length > 0 ? (
+                                <ul className="diff-vuln-list">
+                                  {vulns.map((v: Vulnerability, i: number) => (
+                                    <li
+                                      key={i}
+                                      className={`diff-vuln-item diff-vuln-${v.severity?.toLowerCase() ?? "medium"}`}
+                                    >
+                                      {v.name ?? "Unknown vulnerability"}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p style={{ fontSize: "0.8rem", color: "var(--color-lexai-success)" }}>✓ No vulnerabilities found</p>
+                              )}
+                            </div>
+
+                            {/* Right: patches applied */}
+                            <div className="diff-panel">
+                              <p className="diff-panel-label">🛡️ DocumentCraft Patched ({round.patches_applied ?? 0})</p>
+                              {round.patch_summary ? (
+                                <p className="diff-panel-content">{round.patch_summary}</p>
+                              ) : (
+                                <p style={{ fontSize: "0.8rem", color: "var(--color-lexai-text-muted)" }}>
+                                  {round.patches_applied} clauses strengthened
+                                </p>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -957,10 +981,28 @@ export default function Home() {
               >
                 Analyze Another Document
               </button>
-              <button onClick={handleDownload} className="btn-primary flex-1">
+              <button onClick={handleDownload} className="btn-secondary flex-1">
                 <span className="flex items-center justify-center gap-2">
                   <DownloadIcon className="w-5 h-5" />
-                  Download Hardened Document
+                  Download as TXT
+                </span>
+              </button>
+              <button
+                onClick={() =>
+                  result?.task_id &&
+                  generatePDF(result.task_id, result.final_document ?? "", {
+                    initial_score: result.initial_score,
+                    final_score: result.final_score,
+                    rounds: result.rounds.length,
+                    document_type: result.document_type,
+                    summary: result.summary,
+                  })
+                }
+                className="btn-primary flex-1"
+              >
+                <span className="flex items-center justify-center gap-2">
+                  <DownloadIcon className="w-5 h-5" />
+                  Download PDF
                 </span>
               </button>
             </div>
