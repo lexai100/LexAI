@@ -40,8 +40,8 @@ class Settings(BaseSettings):
 
     # DocumentCraft – expert legal drafter (DeepSeek V4 Pro)
     DOCUMENT_CRAFT_MODEL: str = "deepseek-ai/deepseek-v4-pro"
-    # LoopholeHound – adversarial analyst (DeepSeek V4 Pro)
-    LOOPHOLE_HOUND_MODEL: str = "deepseek-ai/deepseek-v4-pro"
+    # LoopholeHound – adversarial analyst (DeepSeek Flash for speed + less rate limiting)
+    LOOPHOLE_HOUND_MODEL: str = "deepseek-ai/deepseek-v4-flash"
     # Fast utility model (DeepSeek V4 Flash)
     FAST_MODEL: str = "deepseek-ai/deepseek-v4-flash"
 

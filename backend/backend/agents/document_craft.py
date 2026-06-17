@@ -6,6 +6,7 @@ Uses NVIDIA NIM (Nemotron Ultra 550B) via OpenAI-compatible API through LangChai
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Optional
@@ -149,6 +150,21 @@ class DocumentCraftAgent:
         self.rag = rag_service
         self._config = config
 
+    async def _invoke_with_retry(self, messages: list, max_retries: int = 3):
+        """Invoke LLM with exponential backoff on 429 rate limit errors."""
+        for attempt in range(max_retries):
+            try:
+                return await self.llm.ainvoke(messages)
+            except Exception as e:
+                err = str(e)
+                if ("429" in err or "rate" in err.lower() or "too many" in err.lower()) and attempt < max_retries - 1:
+                    wait = (2 ** attempt) * 10  # 10s, 20s, 40s
+                    logger.warning(f"Rate limited (429). Retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(wait)
+                else:
+                    raise
+        raise RuntimeError("Max retries exceeded due to rate limiting")
+
     # ── Analysis ──────────────────────────────────────────────────────────
 
     async def analyze_document(self, document_text: str, context: str = "") -> dict:
@@ -161,9 +177,8 @@ class DocumentCraftAgent:
             SystemMessage(content=ANALYSIS_SYSTEM_PROMPT),
             HumanMessage(content=f"Document to analyse:\n\n{document_text[:12000]}\n\nAdditional context: {context or 'None provided'}"),
         ]
-        response = await self.llm.ainvoke(messages)
+        response = await self._invoke_with_retry(messages)
 
-        # Parse JSON response
         try:
             content = response.content.strip()
             # Strip markdown code fences if present
@@ -216,7 +231,7 @@ class DocumentCraftAgent:
             SystemMessage(content=system_content),
             HumanMessage(content=human_content),
         ]
-        response = await self.llm.ainvoke(messages)
+        response = await self._invoke_with_retry(messages)
 
         return response.content
 
@@ -245,6 +260,6 @@ class DocumentCraftAgent:
             SystemMessage(content=system_content),
             HumanMessage(content=document[:12000]),
         ]
-        response = await self.llm.ainvoke(messages)
+        response = await self._invoke_with_retry(messages)
 
         return response.content

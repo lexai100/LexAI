@@ -7,6 +7,7 @@ Uses NVIDIA NIM (DeepSeek V4 Pro) via OpenAI-compatible API through LangChain.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Optional
@@ -146,6 +147,21 @@ class LoopholeHoundAgent:
         self.rag = rag_service
         self._config = config
 
+    async def _invoke_with_retry(self, messages: list, max_retries: int = 3):
+        """Invoke LLM with exponential backoff on 429 rate limit errors."""
+        for attempt in range(max_retries):
+            try:
+                return await self.llm.ainvoke(messages)
+            except Exception as e:
+                err = str(e)
+                if ("429" in err or "rate" in err.lower() or "too many" in err.lower()) and attempt < max_retries - 1:
+                    wait = (2 ** attempt) * 10  # 10s, 20s, 40s
+                    logger.warning(f"Rate limited (429). Retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(wait)
+                else:
+                    raise
+        raise RuntimeError("Max retries exceeded due to rate limiting")
+
     async def attack_document(self, document_text: str) -> LoopholeReport:
         """
         Perform adversarial analysis on a legal document.
@@ -175,7 +191,7 @@ class LoopholeHoundAgent:
             HumanMessage(content=f"DOCUMENT TO ATTACK:\n\n{document_text[:12000]}"),
         ]
 
-        response = await self.llm.ainvoke(messages)
+        response = await self._invoke_with_retry(messages)
         return self._parse_attack_response(response.content)
 
     def _parse_attack_response(self, raw: str) -> LoopholeReport:

@@ -178,7 +178,16 @@ export default function Home() {
         }
         break;
       case "error":
-        setError(msg.error);
+        const rawErr: string = msg.error ?? "Unknown error";
+        // Humanize common API errors
+        const friendlyErr = rawErr.includes("429") || rawErr.toLowerCase().includes("too many requests")
+          ? "⚡ The AI API is rate-limited (too many simultaneous requests). The system will auto-retry — please wait 30–60 seconds and try again."
+          : rawErr.includes("timeout") || rawErr.includes("timed out")
+          ? "⏱️ The analysis timed out. The document may be too long — try a shorter excerpt."
+          : rawErr.length > 200
+          ? rawErr.slice(0, 200) + "…"
+          : rawErr;
+        setError(friendlyErr);
         setIsProcessing(false);
         setStatusText("Error occurred");
         break;
@@ -616,18 +625,25 @@ export default function Home() {
         {/* ── Error ─────────────────────────────────────────────────── */}
         {error && (
           <div className="glass-card p-6 border-[var(--color-lexai-danger)] bg-red-500/5 mb-6">
-            <p className="text-[var(--color-lexai-danger)] font-semibold">Error</p>
-            <p className="text-sm text-[var(--color-lexai-text-muted)] mt-1">{error}</p>
-            <button
-              onClick={() => {
-                setError(null);
-                setResult(null);
-                setIsProcessing(false);
-              }}
-              className="btn-secondary mt-4"
-            >
-              Try Again
-            </button>
+            <p className="text-[var(--color-lexai-danger)] font-semibold text-lg">Analysis Failed</p>
+            <p className="text-sm text-[var(--color-lexai-text-muted)] mt-2 leading-relaxed">{error}</p>
+            <div className="flex gap-3 mt-4">
+              <button
+                onClick={() => {
+                  setError(null);
+                  setResult(null);
+                  setIsProcessing(false);
+                }}
+                className="btn-secondary"
+              >
+                ← Try Again
+              </button>
+              {error?.includes("rate-limited") && (
+                <p className="text-xs text-[var(--color-lexai-text-muted)] self-center">
+                  Tip: Wait ~30s before retrying to avoid simultaneous API calls.
+                </p>
+              )}
+            </div>
           </div>
         )}
 
