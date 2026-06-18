@@ -165,17 +165,15 @@ export default function Home() {
         setStatusText("Analysis complete!");
         // Speak a brief summary aloud
         setTtsText(
-          `Analysis complete. Final risk score: ${msg.result.final_score} out of 100. ` +
-          (msg.result.final_score < 15
-            ? "Your document is safe."
-            : msg.result.final_score < 40
+          `Analysis complete. Final risk score: ${msg.result.risk_score} out of 100. ` +
+          (msg.result.risk_score < 15
+            ? "The document meets the safety threshold."
+            : msg.result.risk_score < 40
             ? "Minor issues were found. Review the vulnerabilities."
             : "Significant vulnerabilities remain. Legal review is recommended.")
         );
-        // Auto-fetch case law for the document type
-        if (msg.result.document_type) {
-          fetchCaseLaw(msg.result.document_type);
-        }
+        // Auto-fetch case law
+        fetchCaseLaw("legal document");
         break;
       case "error":
         const rawErr: string = msg.error ?? "Unknown error";
@@ -658,9 +656,9 @@ export default function Home() {
                   <p className="text-sm text-[var(--color-lexai-text-muted)] mb-2">Initial Risk</p>
                   <div
                     className="text-4xl font-extrabold"
-                    style={{ color: getScoreColor(result.initial_score) }}
+                 style={{ color: getScoreColor(result.rounds[0]?.score ?? result.risk_score) }}
                   >
-                    {result.initial_score}
+                    {result.rounds[0]?.score ?? result.risk_score}
                   </div>
                 </div>
 
@@ -672,9 +670,9 @@ export default function Home() {
                   <p className="text-sm text-[var(--color-lexai-text-muted)] mb-2">Final Risk</p>
                   <div
                     className="text-5xl font-extrabold"
-                    style={{ color: getScoreColor(result.final_score) }}
+                    style={{ color: getScoreColor(result.risk_score) }}
                   >
-                    {result.final_score}
+                    {result.risk_score}
                   </div>
                 </div>
               </div>
@@ -700,8 +698,8 @@ export default function Home() {
                   onClick={() => {
                     setActiveResultTab(tab);
                     // Lazy-load case law when tab is opened
-                    if (tab === "caselaw" && kanoonResults.length === 0 && result?.document_type) {
-                      fetchCaseLaw(result.document_type);
+                    if (tab === "caselaw" && kanoonResults.length === 0) {
+                      fetchCaseLaw("shareholders agreement");
                     }
                   }}
                   className={`px-4 py-2 text-sm font-semibold transition-all rounded-t-lg ${
@@ -723,16 +721,60 @@ export default function Home() {
             <div className="glass-card p-6">
               {activeResultTab === "overview" && (
                 <div>
-                  <h3 className="text-lg font-bold mb-4">Analysis Summary</h3>
-                  <p className="text-[var(--color-lexai-text-muted)] leading-relaxed whitespace-pre-wrap">
-                    {result.summary}
-                  </p>
+                {/* ── Point-wise Analysis Summary ── */}
+                  <div className="mb-6">
+                    <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+                      📋 Analysis Summary
+                    </h3>
+                    {(() => {
+                      const initScore = result.rounds[0]?.score ?? result.risk_score;
+                      const finalScore = result.risk_score;
+                      const improvement = initScore - finalScore;
+                      const totalVulns = result.rounds.reduce((s, r) => s + (r.vulnerabilities_found ?? 0), 0);
+                      const totalPatches = result.rounds.reduce((s, r) => s + (r.patches_applied ?? 0), 0);
+                      const allVulns = result.rounds.flatMap(r => r.vulnerabilities ?? []);
+                      const critCount = allVulns.filter(v => v.severity === "CRITICAL").length;
+                      const highCount = allVulns.filter(v => v.severity === "HIGH").length;
+                      const medCount  = allVulns.filter(v => v.severity === "MEDIUM").length;
+                      const lowCount  = allVulns.filter(v => v.severity === "LOW").length;
+                      const riskLabel = finalScore < 15 ? "✅ LOW — Safe to use"
+                        : finalScore < 30 ? "⚠️ MODERATE — Review before signing"
+                        : finalScore < 50 ? "🔶 ELEVATED — Significant issues found"
+                        : finalScore < 70 ? "🔴 HIGH — Substantial vulnerabilities"
+                        : "🚨 CRITICAL — Do NOT sign without professional review";
+                      const summaryPoints = [
+                        { icon: "🔁", label: "Adversarial Rounds", value: `${result.rounds.length} rounds completed` },
+                        { icon: "📉", label: "Risk Reduction", value: improvement > 0 ? `Score improved by ${improvement} pts (${initScore} → ${finalScore})` : `Score: ${finalScore}/100 (no improvement)` },
+                        { icon: "🐛", label: "Total Vulnerabilities Found", value: `${totalVulns} vulnerabilities across all rounds` },
+                        { icon: "🛡️", label: "Patches Applied", value: `${totalPatches} clauses strengthened` },
+                        ...(critCount > 0 ? [{ icon: "💀", label: "Critical Issues", value: `${critCount} CRITICAL vulnerabilities — requires immediate fix` }] : []),
+                        ...(highCount > 0 ? [{ icon: "🔴", label: "High Severity", value: `${highCount} HIGH severity issues` }] : []),
+                        ...(medCount > 0  ? [{ icon: "🟠", label: "Medium Severity", value: `${medCount} MEDIUM severity issues` }] : []),
+                        ...(lowCount > 0  ? [{ icon: "🟡", label: "Low Severity", value: `${lowCount} LOW severity issues` }] : []),
+                        { icon: "⚖️", label: "Final Risk Assessment", value: riskLabel },
+                        ...(result.pii_entities_found > 0 ? [{ icon: "🔒", label: "PII Protection", value: `${result.pii_entities_found} sensitive entities detected and anonymised` }] : []),
+                      ];
+                      return (
+                        <div className="flex flex-col gap-3">
+                          {summaryPoints.map((pt, i) => (
+                            <div key={i} className="flex items-start gap-3 bg-[var(--color-lexai-surface)] rounded-lg p-3 border border-[var(--color-lexai-border)]">
+                              <span className="text-lg mt-0.5">{pt.icon}</span>
+                              <div>
+                                <p className="text-xs font-bold text-[var(--color-lexai-text-muted)] uppercase tracking-wider">{pt.label}</p>
+                                <p className="text-sm text-white mt-0.5 leading-relaxed">{pt.value}</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </div>
 
                   {/* Recharts Compliance Radar */}
-                  {result.radar_scores && (
+                  {result.radar && (
                     <div className="mt-8">
                       <h4 className="text-md font-bold mb-4">Compliance Radar</h4>
-                      <ComplianceRadar scores={result.radar_scores as unknown as Record<string, number>} />
+                      <ComplianceRadar scores={result.radar as unknown as Record<string, number>} />
                     </div>
                   )}
                 </div>
@@ -744,66 +786,73 @@ export default function Home() {
                     <h3 className="text-lg font-bold">Vulnerabilities Found</h3>
                   </div>
 
-                  {/* Loophole Network Graph */}
-                  {result.rounds.length > 0 &&
-                    result.rounds[0]?.attack_report?.vulnerabilities?.length > 0 && (
-                    <div className="glass-card p-4 mb-6">
-                      <h4 className="text-sm font-bold mb-3 text-[var(--color-lexai-text-muted)] uppercase tracking-wider">
-                        🕸️ Vulnerability Network
-                      </h4>
-                      <LoopholeNetwork
-                        vulnerabilities={result.rounds[0].attack_report.vulnerabilities.map(
-                          (v: Vulnerability, i: number) => ({
-                            id: `v-${i}`,
-                            title: v.name ?? "Unknown",
-                            severity: (v.severity?.toLowerCase() ?? "medium") as "critical" | "high" | "medium" | "low",
-                            description: v.explanation,
-                          })
-                        )}
-                      />
-                    </div>
-                  )}
-
-                  {/* Vulnerability cards */}
-                  {result.rounds.length > 0 &&
-                    result.rounds[0]?.attack_report?.vulnerabilities?.length > 0 ? (
-                    <div className="flex flex-col gap-4">
-                      {result.rounds[0].attack_report.vulnerabilities.map(
-                        (vuln: Vulnerability, i: number) => (
-                          <div
-                            key={i}
-                            className="bg-[var(--color-lexai-surface)] rounded-xl p-5 border border-[var(--color-lexai-border)]"
-                          >
-                            <div className="flex items-center justify-between mb-3">
-                              <h4 className="font-semibold">{vuln.name}</h4>
-                              <span className={getSeverityClass(vuln.severity)}>
-                                {vuln.severity}
-                              </span>
-                            </div>
-                            {vuln.affected_clause && (
-                              <p className="text-xs text-[var(--color-lexai-text-muted)] mb-2">
-                                Affected: {vuln.affected_clause}
-                              </p>
-                            )}
-                            <p className="text-sm text-[var(--color-lexai-text-muted)] mb-3">
-                              {vuln.explanation}
-                            </p>
-                            {vuln.exploitation_scenario && (
-                              <div className="bg-red-500/5 border border-red-500/20 rounded-lg p-3 mb-3">
-                                <p className="text-xs font-semibold text-red-400 mb-1">Exploitation Scenario</p>
-                                <p className="text-xs text-[var(--color-lexai-text-muted)]">{vuln.exploitation_scenario}</p>
-                              </div>
-                            )}
+                {(() => {
+                    const allVulns = result.rounds.flatMap(r => r.vulnerabilities ?? []);
+                    return (
+                      <>
+                        {/* Loophole Network Graph */}
+                        {allVulns.length > 0 && (
+                          <div className="glass-card p-4 mb-6">
+                            <h4 className="text-sm font-bold mb-3 text-[var(--color-lexai-text-muted)] uppercase tracking-wider">
+                              🕸️ Vulnerability Network
+                            </h4>
+                            <LoopholeNetwork
+                              vulnerabilities={allVulns.map((v: Vulnerability, i: number) => ({
+                                id: `v-${i}`,
+                                title: v.name ?? "Unknown",
+                                severity: (v.severity?.toLowerCase() ?? "medium") as "critical" | "high" | "medium" | "low",
+                                description: v.explanation,
+                              }))}
+                            />
                           </div>
-                        )
-                      )}
-                    </div>
-                  ) : (
-                    <p className="text-[var(--color-lexai-text-muted)]">
-                      No vulnerability data available.
-                    </p>
-                  )}
-                 </div>
+                        )}
+
+                        {/* Vulnerability cards */}
+                        {allVulns.length > 0 ? (
+                          <div className="flex flex-col gap-4">
+                            {allVulns.map((vuln: Vulnerability, i: number) => (
+                              <div
+                                key={i}
+                                className="bg-[var(--color-lexai-surface)] rounded-xl p-5 border border-[var(--color-lexai-border)]"
+                              >
+                                <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                                  <h4 className="font-semibold">{i + 1}. {vuln.name}</h4>
+                                  <span className={getSeverityClass(vuln.severity)}>{vuln.severity}</span>
+                                </div>
+                                {vuln.affected_clause && (
+                                  <p className="text-xs text-[var(--color-lexai-text-muted)] mb-2">
+                                    📍 Affected Clause: <strong>{vuln.affected_clause}</strong>
+                                  </p>
+                                )}
+                                <p className="text-sm text-[var(--color-lexai-text-muted)] leading-relaxed mb-3">
+                                  {vuln.explanation}
+                                </p>
+                                {vuln.exploitation_scenario && (
+                                  <div className="bg-red-500/5 border border-red-500/20 rounded-lg p-3 mb-3">
+                                    <p className="text-xs font-semibold text-red-400 mb-1">⚠️ Exploitation Scenario</p>
+                                    <p className="text-xs text-[var(--color-lexai-text-muted)] leading-relaxed">{vuln.exploitation_scenario}</p>
+                                  </div>
+                                )}
+                                {vuln.suggested_fix && (
+                                  <div className="bg-green-500/5 border border-green-500/20 rounded-lg p-3">
+                                    <p className="text-xs font-semibold text-green-400 mb-1">✅ Suggested Fix</p>
+                                    <p className="text-xs text-[var(--color-lexai-text-muted)] leading-relaxed">{vuln.suggested_fix}</p>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-center py-12">
+                            <p className="text-5xl mb-4">✅</p>
+                            <p className="text-lg font-semibold text-[var(--color-lexai-success)]">No Vulnerabilities Found</p>
+                            <p className="text-sm text-[var(--color-lexai-text-muted)] mt-2">This document passed all adversarial checks.</p>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
               )}
 
 
@@ -816,10 +865,10 @@ export default function Home() {
                       onClick={() =>
                         result?.task_id &&
                         generatePDF(result.task_id, result.final_document ?? "", {
-                          initial_score: result.initial_score,
-                          final_score: result.final_score,
+                          initial_score: result.rounds[0]?.score ?? result.risk_score,
+                          final_score: result.risk_score,
                           rounds: result.rounds.length,
-                          document_type: result.document_type,
+                          document_type: "Legal Document",
                           summary: result.summary,
                         })
                       }
@@ -844,8 +893,8 @@ export default function Home() {
                   <h3 className="text-lg font-bold mb-4">Battle Log — Before vs After Each Round</h3>
                   <div className="diff-wrap">
                     {result.rounds.map((round, idx) => {
-                      const prevScore = idx === 0 ? result.initial_score : result.rounds[idx - 1].score;
-                      const vulns = round.attack_report?.vulnerabilities ?? [];
+                      const prevScore = idx === 0 ? (result.rounds[0]?.score ?? result.risk_score) : result.rounds[idx - 1].score;
+                      const vulns = round.vulnerabilities ?? [];
                       return (
                         <div key={round.round_number} className="diff-round-block">
                           {/* Header */}
@@ -913,7 +962,7 @@ export default function Home() {
                         value={kanoonCourt}
                         onChange={(e) => {
                           setKanoonCourt(e.target.value);
-                          if (result?.document_type) fetchCaseLaw(result.document_type, e.target.value);
+                          fetchCaseLaw("legal document", e.target.value);
                         }}
                       >
                         <option value="">All Courts</option>
@@ -928,7 +977,7 @@ export default function Home() {
                         id="kanoon-refresh-btn"
                         type="button"
                         className="btn-secondary text-sm py-1.5 px-4"
-                        onClick={() => result?.document_type && fetchCaseLaw(result.document_type)}
+                        onClick={() => fetchCaseLaw("legal document")}
                         disabled={kanoonLoading}
                       >
                         {kanoonLoading ? "Searching…" : "↻ Refresh"}
@@ -1007,10 +1056,10 @@ export default function Home() {
                 onClick={() =>
                   result?.task_id &&
                   generatePDF(result.task_id, result.final_document ?? "", {
-                    initial_score: result.initial_score,
-                    final_score: result.final_score,
+                    initial_score: result.rounds[0]?.score ?? result.risk_score,
+                    final_score: result.risk_score,
                     rounds: result.rounds.length,
-                    document_type: result.document_type,
+                    document_type: "Legal Document",
                     summary: result.summary,
                   })
                 }

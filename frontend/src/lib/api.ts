@@ -26,7 +26,8 @@ export interface AdversarialRound {
   vulnerabilities_found: number;
   patches_applied: number;
   patch_summary?: string;
-  attack_report: LoopholeReport;
+  vulnerabilities: Vulnerability[];
+  document_snapshot?: string;
 }
 
 export interface RadarScores {
@@ -42,14 +43,12 @@ export interface AnalysisResult {
   task_id: string;
   summary: string;
   risk_score: number;
-  initial_score: number;
-  final_score: number;
   rounds: AdversarialRound[];
   final_document: string;
   original_document: string;
-  radar_scores: RadarScores;
+  radar: RadarScores;
   pii_entities_found: number;
-  document_type: string;
+  heat_map?: Array<{ clause: string; risk_level: string; score: number }>;
 }
 
 export interface TaskStatus {
